@@ -1,0 +1,82 @@
+# =====================================================================
+#  MADMAC — FILE ATURAN BOT
+#  Ini SATU-SATUNYA file yang perlu Anda baca/ubah. Tidak perlu coding.
+#  Baris yang diawali tanda # adalah penjelasan, bot mengabaikannya.
+#  Setelah mengubah file ini, restart bot (lihat docs/DEPLOY.md, langkah 8).
+# =====================================================================
+
+# --- MODE -------------------------------------------------------------
+# "testnet" = uang mainan (testnet.binancefuture.com). AMAN.
+# "live"    = uang asli. Bot TETAP menolak trading live sampai Anda
+#             mengetik "go live" di Telegram. Mengubah baris ini saja
+#             tidak cukup — itu disengaja.
+mode: testnet
+
+# --- MARKET -----------------------------------------------------------
+symbol: BTCUSDT          # Binance Futures USDⓈ-M
+timeframe: 5m            # chart yang dipantau Scout (1m, 3m, 5m, 15m)
+
+# --- IZIN TRADE -------------------------------------------------------
+# "per_trade" = setiap sinyal dikirim ke Telegram dengan tombol
+#               ✅ Setujui / ❌ Tolak. Tanpa klik Anda, TIDAK ADA order.
+# "auto"      = bot boleh masuk sendiri selama semua aturan Shield lolos.
+#               Hanya ubah ke "auto" jika Anda SENGAJA memberi izin itu.
+approval: per_trade
+approval_timeout_seconds: 90   # sinyal kedaluwarsa jika tidak dijawab
+# Jika harga sudah bergerak lebih dari ini (dalam % jarak stop) saat
+# Anda klik setuju, order dibatalkan — setup sudah basi.
+max_entry_drift_pct_of_stop: 30
+
+# --- RISIKO (pilihan Anda) --------------------------------------------
+# CATATAN RISK MANAGER: Anda memilih 2% per trade & leverage 20x.
+# Saya keberatan (lihat docs/FINAL_CHECK.md, risiko #1). Saran saya:
+# risk_per_trade_pct: 0.5 dan max_leverage: 10. Anda yang memutuskan.
+risk_per_trade_pct: 2.0        # % modal yang hilang jika stop kena
+max_leverage: 20               # batas KERAS; leverage aktual dihitung otomatis
+margin_type: ISOLATED          # rugi hanya sebatas margin posisi itu
+
+# --- REM DARURAT (Shield) ---------------------------------------------
+daily_loss_limit_pct: 3.0      # stop total hari ini jika rugi ≥ 3%
+max_consecutive_losses: 3      # stop total setelah 3 rugi beruntun
+max_open_positions: 1          # scalping: satu posisi sekaligus
+max_trades_per_day: 20
+# Hari baru dimulai jam 00:00 UTC (= 07:00 WIB).
+
+# --- PENJAGA FEE ------------------------------------------------------
+# Tolak trade jika fee bolak-balik memakan lebih dari X% risiko trade.
+# Contoh: stop terlalu dekat → fee $10 untuk risiko $10 = 100% → DITOLAK.
+max_fee_share_of_risk_pct: 25
+taker_fee_pct: 0.05            # ESTIMASI tarif VIP0 — cek di akun Anda
+slippage_pct: 0.02             # ESTIMASI slippage per eksekusi
+
+# --- KESEHATAN DATA ---------------------------------------------------
+# Jika data harga lebih tua dari ini, Scout diam & Shield blokir entry.
+max_feed_age_seconds: 30
+
+# --- POSISI TANPA STOP ------------------------------------------------
+# Jika Binance menolak/kehilangan stop-loss dan bot gagal memasangnya ulang,
+# true = bot BOLEH menutup posisi itu segera (izin tetap dari Anda).
+# false = bot hanya berhenti dan mengirim alarm; Anda yang menutup manual.
+close_if_stop_fails: true
+
+# --- STRATEGI ---------------------------------------------------------
+# Bot hanya memakai strategi yang (1) ada di daftar ini DAN
+# (2) LULUS uji Lab dengan data asli + fee (lihat data/lab_results.json).
+strategies:
+  - ema_pullback
+  - rsi_reversion
+  - range_breakout
+
+# Syarat LULUS Lab (dihitung SETELAH fee & slippage, pada data
+# "out-of-sample" yang tidak dipakai saat menyusun aturan):
+lab:
+  months_of_data: 6
+  out_of_sample_pct: 30
+  min_trades: 100
+  min_profit_factor: 1.15
+  max_drawdown_pct: 20
+  min_win_rate_pct: 0         # 0 = tidak dicek; profit factor lebih penting
+
+# --- LAPORAN ----------------------------------------------------------
+daily_report_hour_wib: 7       # laporan harian jam 07:00 WIB
+weekly_review_day: sunday
