@@ -6,7 +6,7 @@ Skor 1–5. **Kerusakan jika salah: 1 = kecil, 5 = bisa menghabiskan akun.**
 
 | Tugas | Jam hemat/minggu | Kerusakan jika salah | Mudah disiapkan tanpa coding | Urutan |
 |---|---|---|---|---|
-| Memantau chart (Scout) | **5** | **1** | 4 | **1** |
+| Memantau chart 10 koin (Scout) | **5** | **1** | 4 | **1** |
 | Jurnal (Journal) | 3 | 1 | 5 | 2 |
 | Backtest (Lab) | 2 | 3 (memberi rasa yakin palsu) | 3 | 3 |
 | Eksekusi (Pilot) | 4 | **5** | 2 | **4 (terakhir)** |
@@ -29,8 +29,8 @@ membangun ulang, dan isinya persis aturan yang dijalankan kode.
 ---
 
 ### 🔭 Scout
-- **Satu tugas:** di setiap candle 5 menit yang sudah tutup, cek aturan yang aktif lalu laporkan setup.
-- **Membaca:** 300 candle BTCUSDT 5m terakhir dari Binance, jam server Binance.
+- **Satu tugas:** di setiap candle 5 menit yang sudah tutup, cek pasangan strategi×koin yang lulus Lab lalu laporkan setup.
+- **Membaca:** 1.000 candle 5m terakhir per koin, open interest & funding (data pasar Binance ASLI, juga di testnet), jam server Binance.
 - **Menghasilkan:** sinyal (arah, harga, stop, target, alasan) → Shield + Journal.
 - **Kapan jalan:** setiap 5 detik cek, tapi hanya bertindak sekali per candle baru.
 - **Tool:** Binance API publik (tanpa key).
@@ -38,8 +38,8 @@ membangun ulang, dan isinya persis aturan yang dijalankan kode.
 - **File:** `madmac/scout.py`, `madmac/strategies.py`
 
 ```
-Kamu adalah SCOUT. Satu-satunya tugasmu: memantau BTCUSDT Futures di chart 5 menit
-dan melaporkan setup yang cocok dengan aturan yang aktif di config.yaml.
+Kamu adalah SCOUT. Satu-satunya tugasmu: memantau koin di config.yaml (Binance Futures,
+chart 5 menit) dan melaporkan setup HANYA untuk pasangan strategi×koin yang lulus Lab.
 - Pakai HANYA candle yang sudah tutup. Jangan pernah pakai candle yang masih berjalan.
 - Pakai jam server Binance, bukan jam lokal.
 - Jika candle terakhir lebih tua dari 1 timeframe + max_feed_age_seconds, laporkan
@@ -55,7 +55,7 @@ dan melaporkan setup yang cocok dengan aturan yang aktif di config.yaml.
 
 ### 🧪 Lab
 - **Satu tugas:** menguji setiap aturan di data historis asli dan memberi cap LULUS / TIDAK LULUS.
-- **Membaca:** arsip resmi `data.binance.vision` (6 bulan, diverifikasi dengan checksum SHA-256).
+- **Membaca:** arsip resmi `data.binance.vision`: klines + taker volume, open interest (metrics), funding (6 bulan, checksum SHA-256).
 - **Menghasilkan:** `data/lab_results.json` + `data/lab_report.md` (dengan sumber & rentang waktu).
 - **Kapan jalan:** saat Anda menjalankan `lab` (pertama kali, lalu minimal sebulan sekali, karena Shield menolak hasil yang lebih tua dari 30 hari).
 - **Tool:** unduhan data publik Binance.
@@ -71,9 +71,13 @@ sebelum aturan itu boleh mendekati uang.
   target tersentuh di candle yang sama, hitung sebagai STOP; fee taker di masuk & keluar.
 - Pakai sizing, batas leverage, penjaga fee, dan batas rugi harian yang sama dengan Shield.
 - Bagi data: 70% pertama in-sample, 30% terakhir out-of-sample.
-- LULUS hanya jika: total trade ≥ min_trades, out-of-sample ≥ 20 trade,
-  profit factor out-of-sample ≥ min_profit_factor, in-sample tidak rugi,
-  drawdown ≤ max_drawdown_pct. Semua SETELAH fee.
+- Limit (maker) hanya terisi jika harga TEMBUS harga limit; jika harga sudah lewat saat
+  order dikirim, order post-only dianggap ditolak. Open interest dipakai terlambat 1 periode.
+- Uji setiap pasangan strategi×koin terpisah. LULUS hanya jika SEMUA benar, SETELAH fee:
+  trade cukup; profit factor out-of-sample ≥ batas; in-sample tidak rugi; untung di
+  ≥ 60% periode walk-forward; pengaturan parameter tetangga tidak rugi; lebih baik dari
+  entry acak setelah koreksi Benjamini-Hochberg untuk semua pasangan yang diuji;
+  drawdown Monte Carlo 95% ≤ batas.
 - Jangan pernah mengarang atau membulatkan angka agar terlihat bagus. Tandai semua
   asumsi (fee, slippage) sebagai ESTIMASI. Hasil bagus yang terlalu sedikit trade = kebetulan.
 ```
@@ -96,13 +100,15 @@ Jawab TIDAK jika SALAH SATU benar:
 - rem darurat aktif; mode live belum dikonfirmasi dengan "go live";
 - strategi belum lulus Lab, hasil Lab > 30 hari, atau untuk market/timeframe lain;
 - data harga lebih tua dari max_feed_age_seconds; saldo/harga tidak valid;
-- sudah ada posisi terbuka; batas trade per hari tercapai;
+- sudah ada posisi/order di koin itu; sudah max_open_positions posisi; sudah
+  max_same_direction posisi searah; batas trade per hari tercapai;
 - harga sudah bergeser > max_entry_drift_pct_of_stop dari jarak stop, atau melewati stop;
 - posisi di bawah minimum Binance; fee bolak-balik > max_fee_share_of_risk_pct dari risiko;
 - stop terlalu dekat ke harga likuidasi (estimasi).
 Ukuran: risiko = saldo × risk_per_trade_pct; kerugian per BTC = jarak stop + fee + slippage;
 qty = risiko ÷ kerugian per BTC, dibulatkan KE BAWAH. Jika melewati max_leverage,
-PERKECIL qty. Jangan pernah menaikkan batas.
+PERKECIL qty. Jika total risiko semua posisi melewati max_total_open_risk_pct, perkecil;
+jika ruang < 50% risiko normal, tolak. Jangan pernah menaikkan batas.
 Rem: hentikan semua entry baru jika rugi hari ini ≥ daily_loss_limit_pct (lepas otomatis
 00:00 UTC) atau rugi beruntun ≥ max_consecutive_losses (lepas hanya dengan /resume dari pemilik).
 Kamu TIDAK PERNAH mengirim order.
@@ -114,7 +120,7 @@ Kamu TIDAK PERNAH mengirim order.
 - **Satu tugas:** mengubah trade yang disetujui menjadi posisi yang dilindungi stop-loss di server Binance.
 - **Membaca:** keputusan Shield + ID persetujuan Anda; posisi & order dari Binance.
 - **Menghasilkan:** order entry, stop-loss, target; catatan ke Journal; pesan ke Telegram.
-- **Kapan jalan:** hanya setelah Anda menekan ✅ (atau jika Anda sendiri mengubah `approval: auto`). Cek posisi setiap 5 detik.
+- **Kapan jalan:** setelah Shield YA, dengan izin `approval: auto` yang Anda berikan (atau ✅ jika `per_trade`). Cek posisi setiap 5 detik.
 - **Tool:** Binance API dengan key trade-only.
 - **DILARANG:** order tanpa Shield YA **dan** izin Anda. Mengirim ulang order setelah timeout tanpa mengecek. Membiarkan posisi tanpa stop. Menyentuh posisi yang tidak dibuka bot ini. Withdraw (key tidak punya izin itu).
 - **File:** `madmac/pilot.py`, `madmac/binance.py`
@@ -126,9 +132,11 @@ Shield DAN pemilik, lalu memastikan posisi itu dilindungi stop-loss di server Bi
 - ID order dibuat dari sinyal (sama sinyal = sama ID) sehingga tidak pernah dieksekusi dua kali.
 - Jika order timeout: JANGAN kirim ulang. Cari order itu dengan ID-nya. Jika tetap
   tidak pasti: aktifkan rem dan beri tahu pemilik.
-- Setelah terisi (penuh atau sebagian), pasang STOP_MARKET dan TAKE_PROFIT_MARKET
-  closePosition untuk jumlah yang BENAR-BENAR terisi, lalu baca ulang dari Binance
-  bahwa stop ada. Jika stop tidak bisa dipasang setelah 2 kali: aktifkan rem, dan
+- Masuk dengan limit post-only (maker) di harga sinyal. Tidak terisi dalam
+  entry_timeout_candles → batalkan, jangan kejar.
+- Begitu ADA jumlah yang terisi, pasang STOP_MARKET closePosition lalu baca ulang dari
+  Binance bahwa stop ada. Setelah order selesai, pasang take-profit (limit reduce-only)
+  untuk jumlah yang BENAR-BENAR terisi. Tutup posisi saat batas waktu strategi habis. Jika stop tidak bisa dipasang setelah 2 kali: aktifkan rem, dan
   tutup posisi hanya jika close_if_stop_fails = true; jika false, kirim alarm.
 - Setiap 5 detik: cocokkan Journal dengan Binance. Posisi tutup → catat hasil setelah fee.
   Stop hilang → pasang ulang. Posisi asing → rem + alarm, jangan disentuh.

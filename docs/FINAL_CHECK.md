@@ -4,14 +4,15 @@ Jawab **YA** untuk semua poin. Satu "tidak" berarti tetap di testnet.
 
 | Pertanyaan | Bagaimana mengeceknya | Status saat build |
 |---|---|---|
-| Apakah setiap agent hanya punya satu tugas? | [AGENTS.md](AGENTS.md): Scout tidak bisa order, Shield tidak bisa order, Pilot tidak bisa menyetujui diri sendiri | ✅ dibangun & diuji |
-| Bisakah bot trading tanpa persetujuan Anda? | Hanya jika Anda sendiri mengubah `approval: auto`. Tes: `test_pilot_refuses_without_shield_or_human`, `test_full_flow_signal_needs_your_tap` | ✅ tidak bisa (default) |
-| Apakah bot berhenti saat data mati? | Tes #4 & #5 di [STRESS_TEST.md](STRESS_TEST.md) | ✅ diuji dengan data palsu · ⏳ perlu dilihat sekali di testnet |
-| Apakah bot berhenti saat batas harian kena? | `test_daily_limit_resets_at_utc_midnight`, `test_three_losses_halt_until_resume` | ✅ diuji |
-| Apakah setiap aturan lolos **2 minggu paper trading** setelah fee? | `/week` di Telegram dua kali; bandingkan dengan laporan Lab | ⏳ **belum: baru mulai** |
-| Apakah stop-loss benar-benar terpasang di Binance? | `selfcheck` + lihat order terbuka di app Binance saat trade testnet pertama | ⏳ **belum: perlu server Anda** |
-| Apakah Anda paham setiap pesan tanpa coding? | Baca 3 laporan harian pertama. Ada yang membingungkan? Beri tahu saya. | ⏳ Anda yang menilai |
-| API key live: hanya Futures, withdraw MATI, dikunci ke IP server? | Binance → API Management | ⏳ nanti |
+| Apakah setiap agent hanya punya satu tugas? | [AGENTS.md](AGENTS.md) | ✅ dibangun & diuji |
+| Bisakah bot trading di luar aturan Anda? | Anda memberi izin **auto**. Bot tetap hanya trading jika: pasangan lulus Lab, Shield YA, tidak ada rem, dan (untuk live) sudah "go live". | ✅ diuji |
+| Apakah bot berhenti saat data mati? | Tes #4 & #5 di [STRESS_TEST.md](STRESS_TEST.md) | ✅ data palsu · ⏳ lihat sekali di testnet |
+| Apakah bot berhenti saat batas harian kena? | Tes rem harian & rugi beruntun | ✅ diuji |
+| Apakah ada pasangan yang lulus Lab dengan data asli? | `data/lab_report.md` | ⏳ **belum: jalankan di server** |
+| Apakah setiap pasangan lolos **2 minggu paper trading** setelah fee? | `/week` dua kali, bandingkan dengan Lab | ⏳ **belum** |
+| Apakah stop-loss & limit order benar-benar jalan di Binance? | `selfcheck` + lihat order di app Binance | ⏳ **belum: perlu server Anda** |
+| Apakah Anda paham setiap pesan tanpa coding? | Baca 3 laporan harian pertama | ⏳ Anda yang menilai |
+| API key live: hanya Futures, withdraw MATI, dikunci ke IP server, **sub-account khusus bot**? | Binance → API Management | ⏳ nanti |
 
 ---
 
@@ -19,13 +20,16 @@ Jawab **YA** untuk semua poin. Satu "tidak" berarti tetap di testnet.
 
 | # | Risiko | Kenapa bisa terjadi | Perbaikan |
 |---|---|---|---|
-| 1 | **Modal kecil vs minimum order Binance** | Risiko 0,5% (sudah Anda pilih, turun dari 2% / 20x) membuat posisi kecil. Pada modal di bawah ±$300 dengan stop lebar, nilai posisi bisa di bawah minimum Binance (±$100, ESTIMASI), lalu Shield menolak trade itu. | Wajar dan aman: trade itu dilewati, bukan dipaksakan. Laporan harian menunjukkan berapa yang diblokir. Jika terlalu sering, tambah modal testnet atau pakai stop lebih rapat (tetap dibatasi penjaga fee). |
-| 2 | **Tidak ada strategi yang lulus Lab** | Scalping BTC setelah fee memang sulit. Tiga aturan bawaan adalah pola umum, bukan rahasia. | Itu hasil yang **benar**: bot hanya memantau, dan Anda tidak rugi apa-apa. Langkah berikutnya: coba timeframe 15m (fee relatif lebih kecil) atau tulis aturan Anda sendiri, lalu uji ulang di Lab. |
-| 3 | **Lab lulus tapi live rugi (overfitting / rezim pasar berubah)** | Masa lalu tidak sama dengan masa depan. | Wajib out-of-sample + 2 minggu paper; Lab wajib diulang ≤30 hari sekali (Shield menolak hasil lama); bandingkan `/week` dengan Lab, dan matikan strategi yang menyimpang jauh. |
-| 4 | **Fee & slippage asli lebih besar dari estimasi** | `taker_fee_pct 0.05` dan `slippage_pct 0.02` adalah **estimasi**. | Cek tarif di akun Binance Anda dan ubah `config.yaml`. Journal mencatat fee **asli** dari Binance, jadi bandingkan setelah 2 minggu. |
-| 5 | **API Binance berubah (khususnya stop-loss)** | Binance memindahkan order stop ke endpoint "Algo Order" pada akhir 2025. Kode belum bisa diverifikasi ke Binance asli dari lingkungan build. | Pilot mencoba endpoint baru dulu, lalu endpoint lama; **selalu membaca ulang** bahwa stop ada; jika tidak ada → posisi ditutup + rem. `selfcheck` menguji ini sebelum bot jalan. |
-| 6 | **Anda tidak sempat menekan ✅ dalam 90 detik** | Scalping butuh respons cepat, padahal tujuan Anda mengurangi waktu layar. | Konflik ini nyata. Opsi: perpanjang `approval_timeout_seconds` (setup jadi basi, dan Shield menolak jika harga sudah lari), atau setelah 2 minggu terbukti, Anda **sendiri** memutuskan `approval: auto`. |
-| 7 | **Server / internet mati saat ada posisi** | VPS bisa down. | Stop-loss & target hidup **di server Binance**, bukan di bot, jadi tetap jalan walaupun bot mati. |
-| 8 | **Kunci API bocor** | Key ditempel di chat, screenshot, atau repo. | Key hanya di `.env` di server (sudah di `.gitignore`); key live: withdraw MATI + kunci IP. Jika curiga bocor: hapus key di Binance segera. |
-| 9 | **Likuidasi sebelum stop** | Leverage tinggi + lonjakan harga ekstrem / gap. | Margin ISOLATED; Shield menolak jika stop terlalu dekat ke estimasi likuidasi; stop memakai harga mark. Pada kejadian ekstrem, slippage tetap mungkin terjadi, dan itu **tidak bisa dihilangkan 100%**. |
-| 10 | **Laporan menunjukkan untung kecil, Anda menaikkan risiko** | Bias manusia setelah beberapa kali menang. | Review mingguan mengingatkan bahwa < 30 trade belum berarti apa-apa. Naikkan risiko hanya setelah ≥ 100 trade live. |
+| 1 | **Tidak ada pasangan yang lulus Lab** | Edge di 5 menit setelah fee itu langka. SMC populer, jadi setup-nya ramai. | Itu hasil yang **benar**: bot hanya memantau, uang aman. Langkah berikutnya: coba 15m, atau ubah/ tambah aturan, lalu uji ulang. |
+| 2 | **Lulus Lab karena kebetulan** | 60 pasangan diuji, jadi beberapa pasti terlihat bagus karena hoki. | Koreksi Benjamini-Hochberg, wajib lebih baik dari entry acak, walk-forward 6 periode, uji parameter tetangga, ditambah 2 minggu paper. |
+| 3 | **Adverse selection limit order** | Limit order cenderung terisi tepat saat harga bergerak **melawan** Anda. Model Lab (harus "tembus", bukan "sentuh") hanya pendekatan. | Bandingkan rasio terisi dan P&L asli di `/week` dengan Lab. Jika jauh lebih buruk, ubah `entry_order: taker` dan uji ulang Lab. |
+| 4 | **Testnet ≠ pasar asli** | Order book testnet tipis dan berbeda, jadi pengisian limit di testnet **tidak realistis**. | Anggap testnet sebagai uji mesin (order, stop, rem), **bukan** bukti profit. Bukti profit = Lab + live kecil yang diawasi. |
+| 5 | **Semua koin jatuh bersamaan** | Altcoin sangat berkorelasi dengan BTC. | Maks 3 posisi, maks 2 searah, total risiko ≤ 1,5%, rem harian −3%. |
+| 6 | **Fee & slippage asli > estimasi** | Angka di config adalah ESTIMASI. | Journal mencatat fee **asli** dari Binance. Sesuaikan config setelah 2 minggu, lalu uji ulang Lab. |
+| 7 | **API Binance berubah (stop-loss, open interest)** | Endpoint belum bisa diverifikasi dari lingkungan build. | `selfcheck` menguji semua; Pilot selalu membaca ulang stop; jika tidak ada → tutup + rem. |
+| 8 | **Data open interest/funding tidak tersedia** | Arsip mungkin berbeda format atau tidak lengkap. | Lab melaporkan "tidak tersedia"; strategi itu tidak dipakai; strategi lain tetap jalan. |
+| 9 | **Rezim pasar berubah** | Pola 6 bulan lalu bisa berhenti bekerja. | Lab wajib diulang ≤ 30 hari (Shield menolak hasil lama); laporan harian memperingatkan jika hasil jauh di bawah Lab. |
+| 10 | **Posisi manual Anda di akun yang sama** | Bot melihat posisi asing → rem. | Pakai **sub-account** khusus bot. |
+| 11 | **Server / internet mati** | VPS bisa down. | Stop & target hidup di server Binance; bot restart sendiri. |
+| 12 | **Kunci API bocor** | Ditempel di chat/screenshot. | Key hanya di `.env` server; withdraw MATI; kunci IP. |
+| 13 | **Godaan menurunkan timeframe ke 1 menit** | Pada 1m, fee ≈ seluruh jarak stop. | Penjaga fee memblokir; jika tetap ingin, uji dulu di Lab (`timeframe: 1m`). |

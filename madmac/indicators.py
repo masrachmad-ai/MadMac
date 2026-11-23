@@ -14,6 +14,7 @@ class Candle:
     close: float
     volume: float
     close_time: int  # ms, UTC
+    taker_buy: float = 0.0  # volume bought by aggressive (market) buyers
 
 
 def ema(values: list[float], period: int) -> list[float | None]:

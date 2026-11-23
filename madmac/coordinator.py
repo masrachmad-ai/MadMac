@@ -27,7 +27,7 @@ HELP = """Perintah:
 /lab — hasil uji Lab terakhir
 /stop — REM DARURAT: blokir semua entry baru
 /resume — lepas rem (setelah Anda meninjau)
-/flat — tutup posisi terbuka (minta konfirmasi)
+/flat — tutup SEMUA posisi & batalkan limit order (minta konfirmasi)
 Ketik "go live" — hanya berlaku jika mode: live di config."""
 
 
@@ -86,8 +86,8 @@ class Coordinator:
         with self.lock:
             self.pending[sid] = {"sig": sig, "expires": time.time() + timeout}
         self.tg.send(
-            f"🔔 SINYAL {sig.side} BTC ({sig.strategy})\n"
-            f"Harga {sig.entry:,.1f} · Stop {sig.stop:,.1f} · Target {sig.target:,.1f}\n"
+            f"🔔 SINYAL {sig.symbol} {sig.side} ({sig.strategy})\n"
+            f"Harga {sig.entry:,.6g} · Stop {sig.stop:,.6g} · Target {sig.target:,.6g}\n"
             f"Alasan: {sig.reason}\n{decision.text()}\n"
             f"Mode: {self.bot.cfg.mode.upper()} · berlaku {timeout} detik.",
             buttons=[("✅ Setujui", f"ok:{sid}"), ("❌ Tolak", f"no:{sid}")])
@@ -141,13 +141,14 @@ class Coordinator:
             with self.lock:
                 self.pending.clear()
             self.tg.send("🛑 REM AKTIF. Tidak ada entry baru. Posisi terbuka tetap dilindungi stop di Binance.\n"
+                         "Limit order yang belum terisi dibatalkan dalam 1 candle.\n"
                          "Ketik /flat untuk menutup posisi, /resume untuk lanjut.")
         elif t == "/resume":
             b.shield.resume(who)
             self.tg.send("▶️ Rem dilepas. Bot kembali memantau.")
         elif t == "/flat":
             self.confirm_flat_until = time.time() + 60
-            self.tg.send("Yakin tutup posisi sekarang di harga pasar? Ketik /flatyakin dalam 60 detik.")
+            self.tg.send("Yakin tutup SEMUA posisi sekarang di harga pasar? Ketik /flatyakin dalam 60 detik.")
         elif t == "/flatyakin":
             if time.time() > self.confirm_flat_until:
                 self.tg.send("Konfirmasi kedaluwarsa. Ketik /flat lagi.")

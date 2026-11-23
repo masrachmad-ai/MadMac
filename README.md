@@ -1,10 +1,12 @@
-# MadMac — Tim Bot Trading BTC Futures (Binance)
+# MadMac — Tim Bot Trading Futures Multi-Koin (Binance)
 
-Bot scalping **BTC/USDT Futures** yang dijalankan oleh 5 "agent", masing-masing dengan satu tugas.
+Bot algo derivatif untuk **10 koin Binance Futures** (chart 5 menit, strategi *smart money* + data derivatif),
+dijalankan oleh beberapa "agent" yang masing-masing punya satu tugas.
 **Saat ini semuanya mode PAPER (testnet).** Uang asli baru dipakai setelah Anda mengetik `go live`.
 
-> ⚠️ Tidak ada bot yang menjamin profit. Scalping futures dengan leverage adalah gaya yang paling
-> sering menghabiskan akun ritel. Bot ini dibangun untuk **melindungi modal dulu**, mencari cuan kedua.
+> ⚠️ Tidak ada bot yang menjamin profit atau bisa meramal harga. Bot ini **mengukur** apakah sebuah
+> strategi punya keunggulan nyata (setelah fee, di data yang belum pernah dilihat, dibanding entry acak)
+> dan **hanya** memakai yang lolos. Modal dilindungi dulu, mencari cuan kedua.
 
 ---
 
@@ -24,10 +26,10 @@ Setelah itu, ikuti [docs/DEPLOY.md](docs/DEPLOY.md) langkah demi langkah.
 
 | Agent | Satu tugasnya | Boleh menyentuh uang? |
 |---|---|---|
-| 🔭 **Scout** | Pantau chart BTC 5 menit 24/7, laporkan setup sesuai aturan | Tidak |
-| 🧪 **Lab** | Uji setiap aturan di data asli Binance + fee + slippage | Tidak |
-| 🛡️ **Shield** | Hitung ukuran posisi, cek semua batas, **rem darurat** | Tidak (hanya YA/TIDAK) |
-| ✈️ **Pilot** | Kirim order **hanya** jika Shield YA **dan** Anda setuju | Ya, dengan 2 kunci |
+| 🔭 **Scout** | Pantau 10 koin di chart 5 menit 24/7 dengan data pasar asli, laporkan setup | Tidak |
+| 🧪 **Lab** | Uji setiap strategi × koin di 6 bulan data asli: fee, walk-forward, vs entry acak, Monte Carlo | Tidak |
+| 🛡️ **Shield** | Ukuran posisi, maks 3 posisi, batas risiko total & korelasi, **rem darurat** | Tidak (hanya YA/TIDAK) |
+| ✈️ **Pilot** | Limit order (maker) + stop-loss di server Binance, **hanya** jika Shield YA | Ya (izin auto dari Anda) |
 | 📒 **Journal** | Catat setiap sinyal, keputusan, trade, alasannya | Tidak |
 | 🧭 **Coordinator** | Satu-satunya yang bicara dengan Anda (Telegram) | Tidak |
 
@@ -36,12 +38,13 @@ Detail tiap agent + prompt-nya: [docs/AGENTS.md](docs/AGENTS.md)
 ## Alur satu trade
 
 ```
-Candle 5m tutup → Scout: "ada setup" → Shield: cek & hitung ukuran
-  → Coordinator kirim ke Telegram [✅ Setujui] [❌ Tolak]   (90 detik)
-  → Anda tekan ✅ → Shield cek ULANG dengan harga terbaru
-  → Pilot: order market + stop-loss & target DI SERVER BINANCE
-  → Pilot verifikasi stop terpasang (kalau gagal → tutup posisi + rem)
-  → Journal mencatat semuanya
+Candle 5m tutup di salah satu koin → Scout: "ada setup" (hanya pasangan yang lulus Lab)
+  → Shield: cek rem, korelasi, risiko total, fee, hitung ukuran
+  → (approval: auto — izin tetap dari Anda; atau tombol ✅ jika per_trade)
+  → Shield cek ULANG dengan harga terbaru
+  → Pilot: limit order post-only (maker). Tidak terisi dalam 1 candle → dibatalkan
+  → Terisi (sebagian pun) → stop-loss DI SERVER BINANCE, diverifikasi
+  → Take-profit (limit) · batas waktu 3 jam · Journal mencatat semuanya
 ```
 
 ## Aturan Anda
@@ -52,10 +55,11 @@ Semua ada di **[config.yaml](config.yaml)**, dalam bahasa Indonesia biasa.
 
 - [docs/DEPLOY.md](docs/DEPLOY.md): menyalakan bot 24/7 tanpa coding
 - [docs/AGENTS.md](docs/AGENTS.md): tabel pilihan otomasi + kartu tiap agent
+- [docs/STRATEGI.md](docs/STRATEGI.md): penjelasan setiap strategi (smart money, derivatif, klasik)
 - [docs/STRESS_TEST.md](docs/STRESS_TEST.md): 7 kegagalan umum, apa yang terjadi, perbaikannya
 - [docs/FINAL_CHECK.md](docs/FINAL_CHECK.md): daftar periksa sebelum uang asli + **WHY THIS COULD FAIL**
 
 ## Catatan teknis untuk pengembang
 
-Python 3.12, dependensi: `requests`, `PyYAML`. Tes: `python -m pytest -q` (31 tes).
+Python 3.12, dependensi: `requests`, `PyYAML`. Tes: `python -m pytest -q` (54 tes).
 Perintah: `python -m madmac run | lab | selfcheck`.

@@ -42,6 +42,11 @@ class OrderUnknown(Exception):
     """Order request timed out and we could not confirm whether it exists."""
 
 
+def _num(x: float) -> str:
+    """Decimal string without float noise (Binance rejects 0.30000000000000004)."""
+    return f"{x:.10f}".rstrip("0").rstrip(".")
+
+
 class Binance:
     def __init__(self, mode: str, session: requests.Session | None = None,
                  key: str | None = None, secret: str | None = None):
@@ -64,7 +69,7 @@ class Binance:
 
     def _request(self, method: str, path: str, params: dict | None = None,
                  signed: bool = False, retries: int = 2):
-        params = dict(params or {})
+        params = {k: (_num(v) if isinstance(v, float) else v) for k, v in (params or {}).items()}
         for attempt in range(retries + 1):
             q = dict(params)
             headers = {}
@@ -74,8 +79,8 @@ class Binance:
                 q["timestamp"] = int(time.time() * 1000) + self.time_offset_ms
                 q["recvWindow"] = 5000
                 qs = urlencode(q)
-                q_sig = hmac.new(self.secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
-                url = f"{self.base}{path}?{qs}&signature={q_sig}"
+                sig = hmac.new(self.secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
+                url = f"{self.base}{path}?{qs}&signature={sig}"
                 headers["X-MBX-APIKEY"] = self.key
             else:
                 url = f"{self.base}{path}" + (f"?{urlencode(q)}" if q else "")
@@ -102,11 +107,11 @@ class Binance:
             raise BinanceError(r.status_code, code, msg)
 
     # ------------------------------------------------------------ market data
-    def klines(self, symbol: str, interval: str, limit: int = 300) -> list[Candle]:
+    def klines(self, symbol: str, interval: str, limit: int = 1000) -> list[Candle]:
         rows = self._request("GET", "/fapi/v1/klines",
                              {"symbol": symbol, "interval": interval, "limit": limit})
         return [Candle(int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]),
-                       float(r[5]), int(r[6])) for r in rows]
+                       float(r[5]), int(r[6]), float(r[9])) for r in rows]
 
     def price(self, symbol: str) -> tuple[float, float]:
         """(price, observed_at_unix_seconds). Uses Binance's own timestamp."""
@@ -114,20 +119,40 @@ class Binance:
         ts = r.get("time")
         return float(r["price"]), (ts / 1000 if ts else time.time())
 
+    def prices(self) -> dict[str, tuple[float, float]]:
+        rows = self._request("GET", "/fapi/v1/ticker/price")
+        now = time.time()
+        return {r["symbol"]: (float(r["price"]), r["time"] / 1000 if r.get("time") else now) for r in rows}
+
     def server_time(self) -> float:
         return self._request("GET", "/fapi/v1/time")["serverTime"] / 1000
 
-    def symbol_rules(self, symbol: str) -> SymbolRules:
+    def open_interest_hist(self, symbol: str, period: str, limit: int = 200) -> list[tuple[int, float]]:
+        """Open interest (USDT value) history. Binance keeps only ~30 days here."""
+        rows = self._request("GET", "/futures/data/openInterestHist",
+                             {"symbol": symbol, "period": period, "limit": limit})
+        return [(int(r["timestamp"]), float(r["sumOpenInterestValue"])) for r in rows]
+
+    def funding_now(self, symbol: str) -> tuple[int, float]:
+        r = self._request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol})
+        return int(r.get("time") or time.time() * 1000), float(r["lastFundingRate"])
+
+    def symbol_rules_all(self, symbols: list[str]) -> dict[str, SymbolRules]:
         info = self._request("GET", "/fapi/v1/exchangeInfo")
-        s = next(x for x in info["symbols"] if x["symbol"] == symbol)
-        f = {x["filterType"]: x for x in s["filters"]}
-        lot = f.get("MARKET_LOT_SIZE") or f["LOT_SIZE"]
-        return SymbolRules(
-            step_size=float(lot["stepSize"]),
-            min_qty=float(lot["minQty"]),
-            min_notional=float(f.get("MIN_NOTIONAL", {}).get("notional", 100)),
-            tick_size=float(f["PRICE_FILTER"]["tickSize"]),
-        )
+        out = {}
+        for s in info["symbols"]:
+            if s["symbol"] not in symbols:
+                continue
+            f = {x["filterType"]: x for x in s["filters"]}
+            lot = f.get("MARKET_LOT_SIZE") or f["LOT_SIZE"]
+            out[s["symbol"]] = SymbolRules(
+                step_size=float(lot["stepSize"]), min_qty=float(lot["minQty"]),
+                min_notional=float(f.get("MIN_NOTIONAL", {}).get("notional", 5)),
+                tick_size=float(f["PRICE_FILTER"]["tickSize"]))
+        return out
+
+    def symbol_rules(self, symbol: str) -> SymbolRules:
+        return self.symbol_rules_all([symbol])[symbol]
 
     # ------------------------------------------------------------ account
     def equity(self) -> float:
@@ -139,17 +164,19 @@ class Binance:
             a = self._request("GET", "/fapi/v2/account", signed=True)
         return float(a["totalMarginBalance"])
 
-    def position(self, symbol: str) -> dict:
+    def positions(self) -> dict[str, dict]:
+        """All non-zero positions: {symbol: {'qty': signed, 'entry': price}}."""
         try:
-            rows = self._request("GET", "/fapi/v3/positionRisk", {"symbol": symbol}, signed=True)
+            rows = self._request("GET", "/fapi/v3/positionRisk", signed=True)
         except BinanceError as e:
             if e.status != 404:
                 raise
-            rows = self._request("GET", "/fapi/v2/positionRisk", {"symbol": symbol}, signed=True)
-        for p in rows:
-            if p["symbol"] == symbol and float(p["positionAmt"]) != 0:
-                return {"qty": float(p["positionAmt"]), "entry": float(p["entryPrice"])}
-        return {"qty": 0.0, "entry": 0.0}
+            rows = self._request("GET", "/fapi/v2/positionRisk", signed=True)
+        return {p["symbol"]: {"qty": float(p["positionAmt"]), "entry": float(p["entryPrice"])}
+                for p in rows if float(p["positionAmt"]) != 0}
+
+    def position(self, symbol: str) -> dict:
+        return self.positions().get(symbol, {"qty": 0.0, "entry": 0.0})
 
     def set_leverage(self, symbol: str, lev: int) -> None:
         self._request("POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": lev}, signed=True)
@@ -163,14 +190,7 @@ class Binance:
                 raise
 
     # ------------------------------------------------------------ orders
-    def market_order(self, symbol: str, side: str, qty: float, client_id: str,
-                     reduce_only: bool = False) -> dict:
-        """Idempotent market order. On timeout, looks the order up by
-        client_id instead of resending."""
-        params = {"symbol": symbol, "side": side, "type": "MARKET", "quantity": qty,
-                  "newClientOrderId": client_id, "newOrderRespType": "RESULT"}
-        if reduce_only:
-            params["reduceOnly"] = "true"
+    def _place_idempotent(self, params: dict, symbol: str, client_id: str) -> dict:
         try:
             return self._request("POST", "/fapi/v1/order", params, signed=True, retries=0)
         except (requests.Timeout, requests.ConnectionError) as e:
@@ -186,9 +206,36 @@ class Binance:
                     continue
             raise OrderUnknown(f"Order {client_id} tidak bisa dikonfirmasi") from e
 
+    def market_order(self, symbol: str, side: str, qty: float, client_id: str,
+                     reduce_only: bool = False) -> dict:
+        params = {"symbol": symbol, "side": side, "type": "MARKET", "quantity": qty,
+                  "newClientOrderId": client_id, "newOrderRespType": "RESULT"}
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        return self._place_idempotent(params, symbol, client_id)
+
+    def limit_order(self, symbol: str, side: str, qty: float, price: float, client_id: str,
+                    reduce_only: bool = False) -> dict:
+        """Post-only (GTX) limit: rests in the book as MAKER or is rejected
+        (status EXPIRED) — it can never cross the spread and pay taker."""
+        params = {"symbol": symbol, "side": side, "type": "LIMIT", "timeInForce": "GTX",
+                  "quantity": qty, "price": price, "newClientOrderId": client_id,
+                  "newOrderRespType": "RESULT"}
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        return self._place_idempotent(params, symbol, client_id)
+
     def get_order(self, symbol: str, client_id: str) -> dict:
         return self._request("GET", "/fapi/v1/order",
                              {"symbol": symbol, "origClientOrderId": client_id}, signed=True)
+
+    def cancel_order(self, symbol: str, client_id: str) -> None:
+        try:
+            self._request("DELETE", "/fapi/v1/order",
+                          {"symbol": symbol, "origClientOrderId": client_id}, signed=True)
+        except BinanceError as e:
+            if e.code != -2011:  # unknown order (already filled/cancelled)
+                raise
 
     def protective_order(self, symbol: str, side: str, kind: str, trigger: float,
                          client_id: str) -> dict:
@@ -211,8 +258,9 @@ class Binance:
             "newClientOrderId": client_id}, signed=True, retries=0)
 
     def open_protective_orders(self, symbol: str) -> list[dict]:
-        """All resting stop/TP orders from both endpoints, normalised to
-        {'type','trigger','client_id','algo'}."""
+        """Resting stop / take-profit orders from both endpoints, normalised to
+        {'type','trigger','client_id','id','algo'}. A reduce-only LIMIT order
+        is reported as type 'TP_LIMIT'."""
         out = []
         try:
             for o in self._request("GET", "/fapi/v1/openAlgoOrders", {"symbol": symbol}, signed=True) or []:
@@ -223,21 +271,22 @@ class Binance:
             if e.status not in (400, 404):
                 raise
         for o in self._request("GET", "/fapi/v1/openOrders", {"symbol": symbol}, signed=True):
-            if o.get("type") in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
-                out.append({"type": o["type"], "trigger": float(o.get("stopPrice") or 0),
+            t = o.get("type")
+            if t in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
+                out.append({"type": t, "trigger": float(o.get("stopPrice") or 0),
+                            "client_id": o.get("clientOrderId"), "id": o.get("orderId"), "algo": False})
+            elif t == "LIMIT" and o.get("reduceOnly"):
+                out.append({"type": "TP_LIMIT", "trigger": float(o.get("price") or 0),
                             "client_id": o.get("clientOrderId"), "id": o.get("orderId"), "algo": False})
         return out
 
     def cancel_all(self, symbol: str) -> None:
         for o in self.open_protective_orders(symbol):
-            try:
-                if o["algo"]:
+            if o["algo"]:
+                try:
                     self._request("DELETE", "/fapi/v1/algoOrder", {"algoId": o["id"]}, signed=True)
-                else:
-                    self._request("DELETE", "/fapi/v1/order",
-                                  {"symbol": symbol, "orderId": o["id"]}, signed=True)
-            except BinanceError:
-                pass
+                except BinanceError:
+                    pass
         self._request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol}, signed=True)
 
     def user_trades(self, symbol: str, start_ms: int) -> list[dict]:

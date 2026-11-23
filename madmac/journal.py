@@ -17,9 +17,11 @@ CREATE TABLE IF NOT EXISTS events (
   agent TEXT NOT NULL, message TEXT NOT NULL, data TEXT
 );
 CREATE TABLE IF NOT EXISTS trades (
-  id TEXT PRIMARY KEY, opened_ts INTEGER NOT NULL, closed_ts INTEGER,
+  id TEXT PRIMARY KEY, symbol TEXT NOT NULL, status TEXT NOT NULL,
+  placed_ts INTEGER NOT NULL, opened_ts INTEGER, closed_ts INTEGER,
   mode TEXT NOT NULL, strategy TEXT NOT NULL, side TEXT NOT NULL,
   qty REAL NOT NULL, entry REAL NOT NULL, stop REAL NOT NULL, target REAL NOT NULL,
+  max_hold_s INTEGER NOT NULL DEFAULT 0, tp_placed INTEGER NOT NULL DEFAULT 0,
   exit REAL, pnl_usdt REAL, fees_usdt REAL, reason TEXT, exit_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS state (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -67,32 +69,59 @@ class Journal:
             self.db.execute("INSERT OR REPLACE INTO state(k,v) VALUES(?,?)", (k, json.dumps(v)))
 
     # ---------- trades ----------
-    def open_trade(self, tid: str, mode: str, strategy: str, side: str, qty: float,
-                   entry: float, stop: float, target: float, reason: str) -> None:
+    # status: pending (limit order waiting) → open (filled, protected) → closed
+    #         pending → cancelled (never filled)
+    def add_trade(self, tid: str, symbol: str, mode: str, strategy: str, side: str, qty: float,
+                  entry: float, stop: float, target: float, reason: str, max_hold_s: int,
+                  status: str = "pending") -> None:
+        now = int(time.time())
         with self.lock:
             self.db.execute(
-                "INSERT OR IGNORE INTO trades(id,opened_ts,mode,strategy,side,qty,entry,stop,target,reason)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (tid, int(time.time()), mode, strategy, side, qty, entry, stop, target, reason))
+                "INSERT OR IGNORE INTO trades(id,symbol,status,placed_ts,opened_ts,mode,strategy,side,qty,entry,"
+                "stop,target,max_hold_s,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (tid, symbol, status, now, now if status == "open" else None, mode, strategy, side, qty,
+                 entry, stop, target, max_hold_s, reason))
+
+    def mark_open(self, tid: str, qty: float, entry: float) -> None:
+        with self.lock:
+            self.db.execute("UPDATE trades SET status='open', qty=?, entry=?, opened_ts=COALESCE(opened_ts,?)"
+                            " WHERE id=?", (qty, entry, int(time.time()), tid))
+
+    def mark_tp(self, tid: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE trades SET tp_placed=1 WHERE id=?", (tid,))
+
+    def mark_cancelled(self, tid: str, why: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE trades SET status='cancelled', closed_ts=?, exit_reason=? WHERE id=?",
+                            (int(time.time()), why, tid))
 
     def close_trade(self, tid: str, exit_price: float, pnl: float, fees: float, why: str) -> None:
         with self.lock:
             self.db.execute(
-                "UPDATE trades SET closed_ts=?,exit=?,pnl_usdt=?,fees_usdt=?,exit_reason=?"
-                " WHERE id=? AND closed_ts IS NULL",
+                "UPDATE trades SET status='closed', closed_ts=?,exit=?,pnl_usdt=?,fees_usdt=?,exit_reason=?"
+                " WHERE id=? AND status IN ('open','pending')",
                 (int(time.time()), exit_price, pnl, fees, why, tid))
 
+    def trade(self, tid: str) -> dict | None:
+        r = self._trades("id=?", tid)
+        return r[0] if r else None
+
+    def active_trades(self) -> list[dict]:
+        """pending + open: everything that holds or may soon hold risk."""
+        return self._trades("status IN ('pending','open')")
+
     def open_trades(self) -> list[dict]:
-        return self._trades("closed_ts IS NULL")
+        return self._trades("status='open'")
 
     def closed_since(self, ts: int) -> list[dict]:
-        return self._trades("closed_ts IS NOT NULL AND closed_ts>=?", ts)
+        return self._trades("status='closed' AND closed_ts>=?", ts)
 
     def trades_opened_since(self, ts: int) -> list[dict]:
-        return self._trades("opened_ts>=?", ts)
+        return self._trades("status IN ('open','closed') AND opened_ts>=?", ts)
 
     def _trades(self, where: str, *args) -> list[dict]:
-        cur = self.db.execute(f"SELECT * FROM trades WHERE {where} ORDER BY opened_ts", args)
+        cur = self.db.execute(f"SELECT * FROM trades WHERE {where} ORDER BY placed_ts, rowid", args)
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -103,7 +132,7 @@ class Journal:
     def consecutive_losses(self) -> int:
         """Losing streak across days; resets only on a winning trade."""
         rows = self.db.execute(
-            "SELECT pnl_usdt FROM trades WHERE closed_ts IS NOT NULL ORDER BY closed_ts DESC, rowid DESC LIMIT 50"
+            "SELECT pnl_usdt FROM trades WHERE status='closed' ORDER BY closed_ts DESC, rowid DESC LIMIT 50"
         ).fetchall()
         n = 0
         for (p,) in rows:
@@ -120,15 +149,18 @@ class Journal:
         gross_win = sum(t["pnl_usdt"] for t in wins)
         gross_loss = -sum(t["pnl_usdt"] for t in tr if (t["pnl_usdt"] or 0) < 0)
         by_strat: dict[str, float] = {}
+        by_sym: dict[str, float] = {}
         for t in tr:
             by_strat[t["strategy"]] = by_strat.get(t["strategy"], 0) + (t["pnl_usdt"] or 0)
+            by_sym[t["symbol"]] = by_sym.get(t["symbol"], 0) + (t["pnl_usdt"] or 0)
         return dict(
             trades=len(tr), wins=len(wins),
             win_rate=(len(wins) / len(tr) * 100) if tr else 0.0,
             pnl=sum(t["pnl_usdt"] or 0 for t in tr),
             fees=sum(t["fees_usdt"] or 0 for t in tr),
             profit_factor=(gross_win / gross_loss) if gross_loss else None,
-            by_strategy=by_strat,
+            by_strategy=by_strat, by_symbol=by_sym,
+            unfilled=len(self._trades("status='cancelled' AND closed_ts>=?", since_ts)),
             blocked=len(self.events_since(since_ts, ("shield_block",))),
         )
 

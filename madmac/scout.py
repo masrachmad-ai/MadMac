@@ -1,15 +1,19 @@
-"""SCOUT — watches the chart. One job: on every closed candle, check the
-enabled rules and report setups. Scout never sizes, approves or trades.
+"""SCOUT — watches the charts. One job: when a candle closes, check every
+(strategy, coin) pair that passed the Lab and report setups. Scout never
+sizes, approves or trades.
 
-If the price feed is stale (last closed candle older than it should be),
-Scout reports the problem and returns no signals."""
+Market data ALWAYS comes from Binance's real (live) public market, also in
+testnet mode, so signals are computed on real prices. If a coin's feed is
+stale, Scout reports it and skips that coin."""
 from __future__ import annotations
 
-from .binance import Binance
 from .config import Config
+from .features import Ctx
 from .indicators import Candle
 from .journal import Journal
-from .strategies import STRATEGIES, Signal
+from .strategies import STRATEGIES, scan
+
+KLINES = 1000  # enough history for EMA200 to forget its seed
 
 
 class StaleFeed(Exception):
@@ -29,22 +33,44 @@ def check_fresh(candles: list[Candle], now_ms: int, tf_seconds: int, max_age_s: 
 
 
 class Scout:
-    def __init__(self, cfg: Config, ex: Binance, journal: Journal):
-        self.cfg, self.ex, self.j = cfg, ex, journal
+    def __init__(self, cfg: Config, market, journal: Journal):
+        self.cfg, self.mkt, self.j = cfg, market, journal
+        self.stale: dict[str, str] = {}
 
-    def scan(self) -> list[Signal]:
-        now_ms = int(self.ex.server_time() * 1000)  # exchange clock, not ours → no timezone bugs
-        candles = closed_only(self.ex.klines(self.cfg.symbol, self.cfg.timeframe, 300), now_ms)
-        check_fresh(candles, now_ms, self.cfg.tf_seconds, self.cfg.max_feed_age_seconds)
-        last_seen = self.j.get("scout_last_candle", 0)
-        if candles[-1].close_time <= last_seen:
+    def due(self, sym: str, now_ms: int) -> bool:
+        last = self.j.get(f"scout_last:{sym}", 0)
+        return now_ms >= last + self.cfg.tf_seconds * 1000 + 2000
+
+    def scan(self, pairs: set[tuple[str, str]]) -> list:
+        """pairs = (strategy, symbol) allowed by the Lab."""
+        if not pairs:
             return []
-        self.j.set("scout_last_candle", candles[-1].close_time)
+        now_ms = int(self.mkt.server_time() * 1000)  # exchange clock → no timezone bugs
         out = []
-        for name in self.cfg.strategies:
-            sig = STRATEGIES[name](candles)
-            if sig:
-                self.j.log("scout", "signal", f"{sig.strategy} {sig.side} @ {sig.entry:,.1f} — {sig.reason}",
-                           stop=sig.stop, target=sig.target, candle=sig.candle_time)
-                out.append(sig)
+        for sym in self.cfg.symbols:
+            strats = [s for s, x in pairs if x == sym]
+            if not strats or not self.due(sym, now_ms):
+                continue
+            try:
+                candles = closed_only(self.mkt.klines(sym, self.cfg.timeframe, KLINES), now_ms)
+                check_fresh(candles, now_ms, self.cfg.tf_seconds, self.cfg.max_feed_age_seconds)
+            except StaleFeed as e:
+                if sym not in self.stale:
+                    self.j.log("scout", "stale_feed", f"{sym}: {e}")
+                self.stale[sym] = str(e)
+                continue
+            self.stale.pop(sym, None)
+            self.j.set(f"scout_last:{sym}", candles[-1].close_time)
+            oi = funding = None
+            if any(STRATEGIES[s]["needs_oi"] for s in strats):
+                tf_ms = self.cfg.tf_seconds * 1000  # same one-period publication delay as the Lab
+                oi = [(t + tf_ms, v) for t, v in self.mkt.open_interest_hist(sym, self.cfg.timeframe, 200)]
+                funding = [(candles[-1].close_time, self.mkt.funding_now(sym)[1])]  # current rate
+            ctx = Ctx(candles, sym, oi=oi, funding=funding)
+            for name in strats:
+                sig = scan(name, ctx)[-1]
+                if sig:
+                    self.j.log("scout", "signal", f"{sym} {name} {sig.side} @ {sig.entry:,.6g} — {sig.reason}",
+                               symbol=sym, stop=sig.stop, target=sig.target, candle=sig.candle_time)
+                    out.append(sig)
         return out

@@ -56,14 +56,16 @@ Biarkan baris LIVE **kosong**.
 
 ```bash
 docker compose build
-docker compose run --rm bot python -m pytest -q          # 31 stress test → harus "31 passed"
+docker compose run --rm bot python -m pytest -q          # 54 tes → harus "54 passed"
 docker compose run --rm bot python -m madmac selfcheck   # koneksi, saldo, stop-loss uji, Telegram
-docker compose run --rm bot python -m madmac lab         # backtest 6 bulan data asli (±5–15 menit)
+docker compose run --rm bot python -m madmac lab         # 60 pasangan × 6 bulan data asli (±20–60 menit pertama kali)
 ```
 
 - `selfcheck` harus diakhiri **SEMUA OK**. Jika ada ❌, kirim **teks error-nya** ke saya (bukan key Anda).
-- `lab` mencetak laporan. Strategi bertanda **❌ TIDAK LULUS** tidak akan pernah dipakai bot.
+- `lab` mengunduh ±2.000 file data resmi Binance (disimpan, jadi uji berikutnya cepat), lalu mencetak
+  laporan. Laporan lengkap ada di `data/lab_report.md`. Pasangan bertanda **❌** tidak akan pernah dipakai bot.
   Jika **tidak ada yang lulus**, bot tetap jalan tapi **hanya memantau**. Itu hasil yang jujur, bukan error.
+- Kirim ke saya isi `data/lab_report.md` (tidak berisi rahasia), dan kita evaluasi bersama.
 
 ## Langkah 8: Nyalakan 24/7
 
