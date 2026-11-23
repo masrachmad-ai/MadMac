@@ -28,11 +28,10 @@ approval_timeout_seconds: 90   # sinyal kedaluwarsa jika tidak dijawab
 max_entry_drift_pct_of_stop: 30
 
 # --- RISIKO (pilihan Anda) --------------------------------------------
-# CATATAN RISK MANAGER: Anda memilih 2% per trade & leverage 20x.
-# Saya keberatan (lihat docs/FINAL_CHECK.md, risiko #1). Saran saya:
-# risk_per_trade_pct: 0.5 dan max_leverage: 10. Anda yang memutuskan.
-risk_per_trade_pct: 2.0        # % modal yang hilang jika stop kena
-max_leverage: 20               # batas KERAS; leverage aktual dihitung otomatis
+# Diubah 23 Nov 2026 atas keputusan Anda: dari 2% / 20x ke 0,5% / 10x.
+# Dengan batas harian −3%, Anda punya ±6 kali rugi sebelum rem aktif.
+risk_per_trade_pct: 0.5        # % modal yang hilang jika stop kena
+max_leverage: 10               # batas KERAS; leverage aktual dihitung otomatis
 margin_type: ISOLATED          # rugi hanya sebatas margin posisi itu
 
 # --- REM DARURAT (Shield) ---------------------------------------------
